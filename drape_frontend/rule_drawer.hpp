@@ -2,6 +2,7 @@
 
 #include "drape_frontend/custom_symbol.hpp"
 #include "drape_frontend/map_shape.hpp"
+#include "drape_frontend/metaline_manager.hpp"
 #include "drape_frontend/tile_key.hpp"
 #include "drape_frontend/traffic_generator.hpp"
 
@@ -32,7 +33,8 @@ public:
   RuleDrawer(TDrawerCallback const & drawerFn,
              TCheckCancelledCallback const & checkCancelled,
              TIsCountryLoadedByNameFn const & isLoadedFn,
-             ref_ptr<EngineContext> engineContext);
+             ref_ptr<EngineContext> engineContext,
+             MetalineCache && metalineCache);
   ~RuleDrawer();
 
   void operator()(FeatureType const & f);
@@ -59,6 +61,8 @@ private:
 
   ref_ptr<EngineContext> m_context;
   CustomSymbolsContextPtr m_customSymbolsContext;
+  MetalineCache m_metalineCache;
+
   m2::RectD m_globalRect;
   double m_currentScaleGtoP;
   double m_trafficScalePtoG;

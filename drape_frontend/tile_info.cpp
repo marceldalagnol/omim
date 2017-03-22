@@ -2,6 +2,7 @@
 #include "drape_frontend/drape_measurer.hpp"
 #include "drape_frontend/engine_context.hpp"
 #include "drape_frontend/map_data_provider.hpp"
+#include "drape_frontend/metaline_manager.hpp"
 #include "drape_frontend/rule_drawer.hpp"
 #include "drape_frontend/stylist.hpp"
 
@@ -73,8 +74,8 @@ void TileInfo::ReadFeatures(MapDataProvider const & model)
     auto const deviceLang = StringUtf8Multilang::GetLangIndex(languages::GetCurrentNorm());
     RuleDrawer drawer(std::bind(&TileInfo::InitStylist, this, deviceLang, _1, _2),
                       std::bind(&TileInfo::IsCancelled, this),
-                      model.m_isCountryLoadedByName,
-                      make_ref(m_context));
+                      model.m_isCountryLoadedByName, make_ref(m_context),
+                      m_context->GetMetalineManager()->GetMetalines(m_featureInfo));
     model.ReadFeatures(std::bind<void>(std::ref(drawer), _1), m_featureInfo);
   }
 #if defined(DRAPE_MEASURER) && defined(TILES_STATISTIC)

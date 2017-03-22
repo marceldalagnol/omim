@@ -15,6 +15,8 @@
 #include "indexer/road_shields_parser.hpp"
 #include "indexer/scales.hpp"
 
+#include "geometry/clipping.hpp"
+
 #include "base/assert.hpp"
 #include "base/logging.hpp"
 
@@ -161,12 +163,14 @@ namespace df
 RuleDrawer::RuleDrawer(TDrawerCallback const & drawerFn,
                        TCheckCancelledCallback const & checkCancelled,
                        TIsCountryLoadedByNameFn const & isLoadedFn,
-                       ref_ptr<EngineContext> engineContext)
+                       ref_ptr<EngineContext> engineContext,
+                       MetalineCache && metalineCache)
   : m_callback(drawerFn)
   , m_checkCancelled(checkCancelled)
   , m_isLoadedFn(isLoadedFn)
   , m_context(engineContext)
   , m_customSymbolsContext(engineContext->GetCustomSymbolsContext().lock())
+  , m_metalineCache(std::move(metalineCache))
   , m_wasCancelled(false)
 {
   ASSERT(m_callback != nullptr, ());
@@ -322,18 +326,47 @@ void RuleDrawer::ProcessLineStyle(FeatureType const & f, Stylist const & s, TIns
 {
   int const zoomLevel = m_context->GetTileKey().m_zoomLevel;
 
-  ApplyLineFeature apply(m_context->GetTileKey(), insertShape, f.GetID(),
-                         m_currentScaleGtoP, minVisibleScale, f.GetRank(),
-                         s.GetCaptionDescription(), f.GetPointsCount());
-  f.ForEachPoint(apply, zoomLevel);
+  ApplyLineFeatureGeometry applyGeom(m_context->GetTileKey(), insertShape, f.GetID(),
+                                     m_currentScaleGtoP, minVisibleScale, f.GetRank(),
+                                     f.GetPointsCount(), m_metalineCache.find(f.GetID()) != m_metalineCache.end());
+  f.ForEachPoint(applyGeom, zoomLevel);
 
   if (CheckCancelled())
     return;
 
-  if (apply.HasGeometry())
-    s.ForEachRule(bind(&ApplyLineFeature::ProcessRule, &apply, _1));
+  if (applyGeom.HasGeometry())
+    s.ForEachRule(bind(&ApplyLineFeatureGeometry::ProcessRule, &applyGeom, _1));
+  applyGeom.Finish();
 
-  apply.Finish(m_context->GetTextureManager(), ftypes::GetRoadShields(f));
+  std::vector<m2::SharedSpline> clippedSplines;
+  bool needAdditional = true;
+  bool test = false;
+  auto const metalineIt = m_metalineCache.find(f.GetID());
+  if (metalineIt == m_metalineCache.end())
+  {
+    needAdditional = false;
+    clippedSplines = applyGeom.GetClippedSplines();
+  }
+  else if (metalineIt->second.IsNull())
+  {
+    needAdditional = false;
+  }
+  else
+  {
+    test = true;
+    clippedSplines =
+        m2::ClipSplineByRect(m_context->GetTileKey().GetGlobalRect(), metalineIt->second);
+  }
+
+  if (needAdditional && !clippedSplines.empty())
+  {
+    ApplyLineFeatureAdditional applyAdditional(m_context->GetTileKey(), insertShape, f.GetID(),
+                                               m_currentScaleGtoP, minVisibleScale, f.GetRank(),
+                                               s.GetCaptionDescription(), clippedSplines, test);
+    s.ForEachRule(bind(&ApplyLineFeatureAdditional::ProcessRule, &applyAdditional, _1));
+    applyAdditional.Finish(ftypes::GetRoadShields(f));
+  }
+
 
   if (m_context->IsTrafficEnabled() && zoomLevel >= kRoadClass0ZoomLevel)
   {
@@ -396,6 +429,7 @@ void RuleDrawer::operator()(FeatureType const & f)
   if (CheckCancelled())
     return;
 
+  //TODO(@rokuz) optimize style parsing using metaline cache
   Stylist s;
   m_callback(f, s);
 
@@ -498,9 +532,8 @@ void RuleDrawer::DrawTileNet(TInsertShapeFn const & insertShape)
                      strings::to_string(key.m_zoomLevel);
 
   tp.m_primaryTextFont = dp::FontDecl(dp::Color::Red(), 30);
-  tp.m_primaryOffset = {0.0f, 0.0f};
-  drape_ptr<TextShape> textShape =
-      make_unique_dp<TextShape>(r.Center(), tp, m_context->GetTileKey(), false, 0, false);
+  tp.m_primaryOffset = {0.f, 0.f};
+  drape_ptr<TextShape> textShape = make_unique_dp<TextShape>(r.Center(), tp, key, false, 0, false);
   textShape->DisableDisplacing();
   insertShape(std::move(textShape));
 }
